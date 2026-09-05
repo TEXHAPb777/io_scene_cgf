@@ -2,7 +2,8 @@
 
 CGF file format plugin for importing in blender.
 
-**Recommand use blender 4.0+**, i was working on blender 4.3.2.
+Tested on blender 4.3.2.
+Geometry imports fine, UV vertex groups is fine, now i try to fix armatures to support animations.
 
 ## Setup
 
