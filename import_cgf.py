@@ -708,28 +708,29 @@ class ImportCGF:
         assert (isinstance(chunk, CgfFormat.BoneInitialPosChunk))
 
         self.skin_mesh_chunk = chunk.mesh
-
-        fix_z = Quaternion((0, 0, 1), math.radians(90)).to_matrix()
-        # fix_z = Matrix.Rotation(math.radians(-90), 4, 'Z')
-
+        # Матрица поворота 3x3 (влияет только на направление костей на месте)
+        fix_rot = Matrix.Rotation(math.radians(-90.0), 3, 'X')
+        
         for i, mat in enumerate(chunk.initial_pos_matrices):
             info = self.bone_infos[i]
+            
+            # 1. Позиция остается идеальной и точной
             info.bind_pos = Vector((mat.pos.x, mat.pos.y, mat.pos.z))
-            info.bind_rot = Matrix(mat.rot.as_tuple()).transposed()
-
-            cgf_mat = CgfFormat.Matrix44()
-            cgf_mat.set_identity()
-            cgf_mat.set_matrix_33(mat.rot)
-            cgf_mat.set_translation(mat.pos)
-
-            #  print('### %s' % info.name)
-            #  print('---')
-            #  print(cgf_mat)
-            #  print(Matrix(cgf_mat.as_tuple()).transposed())
-            #  print('\n')
-
-            info.bind_mat = Matrix(cgf_mat.as_tuple()).transposed()
-            info.bind_mat = info.bind_mat @ fix_z.transposed().to_4x4()
+            
+            # 2. Получаем исходную матрицу вращения 3x3
+            raw_rot = Matrix(mat.rot.as_tuple()).transposed()
+            
+            # 3. Перенаправляем локальные оси CryEngine в оси Blender (явно через 3x3)
+            blender_rot = Matrix.Identity(3)
+            blender_rot[0][0], blender_rot[1][0], blender_rot[2][0] = raw_rot[0][0], raw_rot[1][0], raw_rot[2][0] # X
+            blender_rot[0][1], blender_rot[1][1], blender_rot[2][1] = raw_rot[0][2], raw_rot[1][2], raw_rot[2][2] # Y <- Z
+            blender_rot[0][2], blender_rot[1][2], blender_rot[2][2] = -raw_rot[0][1], -raw_rot[1][1], -raw_rot[2][1] # Z <- -Y
+            
+            info.bind_rot = blender_rot
+            
+            # 4. Собираем финальную 4x4 матрицу
+            info.bind_mat = info.bind_rot.to_4x4()
+            info.bind_mat.translation = info.bind_pos
             info.origin_mat = info.bind_mat.copy()
 
         for info in self.bone_infos:
