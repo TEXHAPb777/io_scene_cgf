@@ -825,20 +825,30 @@ class ImportCGF:
         keyframes = []
 
         for idx, k in enumerate(chunk.keys):
-            # 1. Применяем масштаб к позиции
-            raw_pos = Vector((k.abs_pos.x, k.abs_pos.y, k.abs_pos.z)) * scale
+            # 1. Извлекаем чистую позицию кадра и применяем масштаб
+            pos_vec = Vector((k.abs_pos.x, k.abs_pos.y, k.abs_pos.z)) * scale
             
-            # 2. Перенаправляем оси позиции так же, как перенаправили оси скелета!
-            pos = Vector((raw_pos.x, raw_pos.z, -raw_pos.y))
+            # 2. Перенаправляем оси позиции так же, как перенаправили оси скелета (Y и Z меняем местами с инверсией)
+            pos = Vector((pos_vec.x, pos_vec.z, -pos_vec.y))
             
-            # 3. Перенаправляем оси кватерниона вращения, чтобы он не скручивал кость в 0
-            rot = Quaternion((k.rel_quat.w, k.rel_quat.x, k.rel_quat.z, -k.rel_quat.y))
+            # 3. Извлекаем исходный кватернион вращения кадра
+            rot_quat = Quaternion((k.rel_quat.w, k.rel_quat.x, k.rel_quat.y, k.rel_quat.z))
             
-            # 4. Собираем чистую матрицу кадра
-            mat = Matrix.Translation(pos) @ rot.to_matrix().to_4x4()
+            # 4. Перенаправляем локальные оси вращения анимации под логику Blender 3x3
+            raw_rot = rot_quat.to_matrix()
+            blender_rot = Matrix.Identity(3)
             
-            keyframe = (k.time, pos, rot, mat)
+            blender_rot[0][0], blender_rot[1][0], blender_rot[2][0] = raw_rot[0][0], raw_rot[1][0], raw_rot[2][0]
+            blender_rot[0][1], blender_rot[1][1], blender_rot[2][1] = raw_rot[0][2], raw_rot[1][2], raw_rot[2][2]
+            blender_rot[0][2], blender_rot[1][2], blender_rot[2][2] = -raw_rot[0][1], -raw_rot[1][1], -raw_rot[2][1]
+            
+            # 5. Собираем итоговую скорректированную матрицу кадра 4x4
+            mat = blender_rot.to_4x4()
+            mat.translation = pos
+            
+            keyframe = (k.time, pos, rot_quat, mat)
             keyframes.append(keyframe)
+
 
 
         ctrls.append((bone_name, chunk.ctrl_id, keyframes))
@@ -961,17 +971,32 @@ class ImportCGF:
                 (time, pos, rot, mat) = keyframe
                 raw_key_index = int(time / anim_info['ticks_per_frame'])
                 bpy.context.scene.frame_set(raw_key_index)
-
-                # Накладываем скорректированную матрицу анимации напрямую в пространство позы кости
-                if pose_bones[bone_name].parent is not None:
-                    # Для дочерних костей берем их локальное смещение относительно родителя
-                    pose_bones[bone_name].matrix = pose_bones[bone_name].parent.matrix @ mat
+                
+                # 1. Получаем базовую матрицу покоя кости из Edit-режима (в пространстве родителя)
+                # Извлекаем её из bone_infos, которые мы сохранили при импорте скелета
+                bone_info = next((b for b in self.bone_infos if b.name == bone_name), None)
+                
+                if bone_info and bone_info.parent:
+                    # Вычисляем локальную матрицу покоя относительно родителя
+                    parent_bind_inv = bone_info.parent.bind_mat.inverted()
+                    local_rest_mat = parent_bind_inv @ bone_info.bind_mat
+                elif bone_info:
+                    local_rest_mat = bone_info.bind_mat
                 else:
-                    # Для корневой кости задаем матрицу напрямую
-                    pose_bones[bone_name].matrix = mat
+                    local_rest_mat = Matrix.Identity(4)
+                
+                # 2. Вычисляем чистую дельту: умножаем инвертированную матрицу покоя на матрицу анимации
+                delta_mat = local_rest_mat.inverted() @ mat
+                
+                # 3. Применяем дельту в матрицу базиса кости позы
+                pose_bones[bone_name].matrix_basis = delta_mat
+                
+                # Фиксируем масштаб, чтобы кости не деформировались
+                pose_bones[bone_name].scale = Vector((1.0, 1.0, 1.0))
                     
                 pose_bones[bone_name].keyframe_insert('rotation_quaternion')
                 pose_bones[bone_name].keyframe_insert('location')
+                pose_bones[bone_name].keyframe_insert('scale')
 
         self.animations_loaded.append(blen_action_name)
 
