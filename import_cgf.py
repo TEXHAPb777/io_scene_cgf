@@ -185,7 +185,7 @@ class ImportCGF:
 
         ma_wrap.base_color = diffuse_color
         ma_wrap.specular = sum(specular_color) / 3
-        ma_wrap.specular_tint = chunk.spec_level
+        # ma_wrap.specular_tint = chunk.spec_level
         ma_wrap.roughness = int((1.0 - chunk.spec_shininess) * 8.0)
         # ma_wrap.metallic = sum(ambient_color) / 3
 
@@ -301,23 +301,23 @@ class ImportCGF:
                 print('No implemented for tex_detail.');
                 pass
 
-        if chunk.opacity < 1.0:
-            ma_wrap.alpha = chunk.opacity
-            mat.blend_method = 'BLEND'
-            mat.shadow_method = 'HASHED'
-        elif alpha_test:
-            mat.blend_method = 'CLIP'
-            mat.shadow_method = 'CLIP'
-            mat.alpha_threshold = chunk.alpha_test
+            if chunk.opacity < 1.0:
+                ma_wrap.alpha = chunk.opacity
+                mat.blend_method = 'BLEND'
+                # mat.shadow_method = 'HASHED'
+            elif alpha_test:
+                mat.blend_method = 'CLIP'
+                # mat.shadow_method = 'CLIP'
+                mat.alpha_threshold = chunk.alpha_test
 
-        if chunk.flags.two_sided == 1:
-            mat.use_backface_culling = False
-        else:
-            mat.use_backface_culling = True
+            if chunk.flags.two_sided == 1:
+                mat.use_backface_culling = False
+            else:
+                mat.use_backface_culling = True
 
-        ma_wrap.update()
+            ma_wrap.update()
 
-        del load_material_image
+            del load_material_image
 
         return mat
 
@@ -364,16 +364,13 @@ class ImportCGF:
 
         use_mat_ids = []
 
-        if verts_nor and me.loops:
-            me.create_normals_split()
-            # or me.split_faces()
-
         if verts_tex and me.polygons:
             me.uv_layers.new()
             # me.uv_textures.new()
 
+        # Вместо me.vertex_colors.new() пишем:
         if verts_col and len(verts_col):
-            me.vertex_colors.new()
+            me.color_attributes.new(name="Col", type='BYTE_COLOR', domain='CORNER')
 
         context_material_old = -1  # avoid a dict lookup
         mat = 0  # rare case it may be un-initialized
@@ -413,13 +410,13 @@ class ImportCGF:
             if len(me.uv_layers) > 0:
                 blen_uvs = me.uv_layers[0]
 
-            blen_vcs = me.vertex_colors[0] if (
-                verts_col and len(verts_col)) else None
+            # Вместо blen_vcs = me.vertex_colors[0] пишем:
+            blen_vcs = me.color_attributes[0] if (verts_col and len(verts_col)) else None
 
             if verts_nor:
                 for face_idx, face_uvidx, lidx in zip(face, uv_face, blen_poly.loop_indices):
-                    me.loops[lidx].normal[:] = verts_nor[0 if (
-                        face_idx is ...) else face_idx]
+                    # me.loops[lidx].normal[:] = verts_nor[0 if (
+                    #     face_idx is ...) else face_idx]
                     if blen_uvs is not None:
                         blen_uvs.data[lidx].uv = verts_tex[0 if (
                             face_uvidx is ...) else face_uvidx]
