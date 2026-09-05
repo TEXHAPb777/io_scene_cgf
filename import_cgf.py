@@ -579,9 +579,10 @@ class ImportCGF:
             axis, roll = mat3_to_vec_roll(info.bind_mat.to_3x3())
 
             axis.z = axis.z + 0.001
-
-            newbone.head = info.bind_pos
-            tmp_tail = info.bind_pos + axis / 5
+            
+            # Умножаем позицию на scale_factor, чтобы кости сели точно в суставы меша
+            newbone.head = info.bind_pos * scale_factor
+            tmp_tail = (info.bind_pos * scale_factor) + (axis / 5)
 
             if len(info.children) == 0:
                 newbone.tail = tmp_tail
@@ -598,8 +599,12 @@ class ImportCGF:
 
             #  newbone.use_inherit_rotation = False
             newbone.use_local_location = False
-
-            newbone.matrix = info.bind_mat
+            
+            # Сохраняем матрицу с учетом правильного сдвига масштаба
+            final_mat = info.bind_mat.copy()
+            final_mat.translation = info.bind_pos * scale_factor
+            newbone.matrix = final_mat
+            
 
             epsilon = 1.19209290E-07
 
@@ -820,13 +825,21 @@ class ImportCGF:
         keyframes = []
 
         for idx, k in enumerate(chunk.keys):
-            mat = Matrix()
-            pos = Vector((k.abs_pos.x, k.abs_pos.y, k.abs_pos.z)) * scale
-            rot = Quaternion((k.rel_quat.w, k.rel_quat.x,
-                             k.rel_quat.y, k.rel_quat.z))
-            mat = Matrix.Translation(pos) @ rot.to_matrix().to_4x4().inverted()
+            # 1. Применяем масштаб к позиции
+            raw_pos = Vector((k.abs_pos.x, k.abs_pos.y, k.abs_pos.z)) * scale
+            
+            # 2. Перенаправляем оси позиции так же, как перенаправили оси скелета!
+            pos = Vector((raw_pos.x, raw_pos.z, -raw_pos.y))
+            
+            # 3. Перенаправляем оси кватерниона вращения, чтобы он не скручивал кость в 0
+            rot = Quaternion((k.rel_quat.w, k.rel_quat.x, k.rel_quat.z, -k.rel_quat.y))
+            
+            # 4. Собираем чистую матрицу кадра
+            mat = Matrix.Translation(pos) @ rot.to_matrix().to_4x4()
+            
             keyframe = (k.time, pos, rot, mat)
             keyframes.append(keyframe)
+
 
         ctrls.append((bone_name, chunk.ctrl_id, keyframes))
 
@@ -861,6 +874,11 @@ class ImportCGF:
 
         print("Ready to load animation %s with action %s as %s" %
               (filepath, action_name, blen_action_name))
+        # ПРОВЕРКА: Пропускаем директории, чтобы избежать ошибки PermissionError
+        if not os.path.isfile(filepath):
+            print("⚠️ Пропуск: Путь %r указывает на папку или файл не найден!" % filepath)
+            return None
+            
         with open(filepath, 'rb') as caf:
             data = CgfFormat.Data()
             try:
@@ -944,13 +962,14 @@ class ImportCGF:
                 raw_key_index = int(time / anim_info['ticks_per_frame'])
                 bpy.context.scene.frame_set(raw_key_index)
 
+                # Накладываем скорректированную матрицу анимации напрямую в пространство позы кости
                 if pose_bones[bone_name].parent is not None:
-                    trans = pose_bones[bone_name].parent.matrix @ fix_z.transposed() @ mat @ fix_z
+                    # Для дочерних костей берем их локальное смещение относительно родителя
+                    pose_bones[bone_name].matrix = pose_bones[bone_name].parent.matrix @ mat
                 else:
-                    trans = mat @ fix_z
-
-                pose_bones[bone_name].matrix = trans
-
+                    # Для корневой кости задаем матрицу напрямую
+                    pose_bones[bone_name].matrix = mat
+                    
                 pose_bones[bone_name].keyframe_insert('rotation_quaternion')
                 pose_bones[bone_name].keyframe_insert('location')
 
@@ -1166,15 +1185,23 @@ class ImportCGF:
             for (chk, obj) in new_objects.items():
                 if obj not in collection.objects.values():
                     collection.objects.link(obj)
-                    obj.select_set(True)
+                obj.select_set(True)
+                
+                # Применяем сглаживание и трансформации матриц СТРОГО к мешам (рукам/оружию)
+                if obj.type == 'MESH':
                     bpy.ops.object.shade_smooth()
-                # we could apply this anywhere before scaling
-                node_transform = node_transforms[chk] if chk in node_transforms else None
-                print('Node transform: %s' % node_transform)
-                obj.matrix_world = global_matrix
-                if node_transform:
-                    obj.matrix_world = obj.matrix_world @ node_transform
-                print('Apply obj %s\' matrix world.' % obj)
+                    
+                    node_transform = node_transforms[chk] if chk in node_transforms else None
+                    print('Node transform: %s' % node_transform)
+                    obj.matrix_world = global_matrix
+                    if node_transform:
+                        obj.matrix_world = obj.matrix_world @ node_transform
+                    print('Apply obj %s\' matrix world.' % obj)
+                
+                # Если это скелет, мы его не двигаем заново, так как его кости уже на местах
+                elif obj.type == 'ARMATURE':
+                    print('Skipping world matrix override for Armature: %s' % obj.name)
+
 
             for i in collection.objects:
                 i.select_set(False)  # deselect all objects
